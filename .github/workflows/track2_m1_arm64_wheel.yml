@@ -97,6 +97,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: official-source-pyswisseph-2.10.3.2-cp312-aarch64
-          path: wheelhouse/
-          retention-days: 1
+          path: |
+            wheelhouse/
+            source/
+          retention-days: 7
           if-no-files-found: error
