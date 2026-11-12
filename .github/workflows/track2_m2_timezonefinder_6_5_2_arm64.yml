@@ -1,0 +1,126 @@
+name: Build exact open-source timezonefinder 6.5.2 ARM64 wheel
+
+# PUBLIC open-source build ONLY. Never access private Interplay code, charts,
+# CI sources, tokens, GitLab packages, or credentials. Research provenance,
+# not scientific certification or production authorization.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/track2_m2_timezonefinder_6_5_2_arm64.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  source-verified-timezonefinder-arm64:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 25
+    steps:
+      - name: Set Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Verify exact upstream original source distribution
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = aarch64
+          mkdir -p source wheelhouse
+          curl --fail --location --silent --show-error --retry 3 \
+            'https://files.pythonhosted.org/packages/20/ca/8d1f93b92b032c8196fd24ea8c5c1c3678ccaae27848ac0cf1314ef3694d/timezonefinder-6.5.2.tar.gz' \
+            --output source/timezonefinder-6.5.2.tar.gz
+          echo '3279e67d5b1b9a54d1a16f3bd4234169f14e2b90c0f58ed37bcfa7303645d610  source/timezonefinder-6.5.2.tar.gz' | sha256sum -c -
+          python - <<'PY'
+          import hashlib,pathlib
+          p=pathlib.Path('source/timezonefinder-6.5.2.tar.gz')
+          assert p.stat().st_size>40_000_000
+          print('CH24_B03_TIMEZONEFINDER_ORIGINAL_SDIST_SHA256=PASS')
+          PY
+      - name: Build exact original Python 3.12 aarch64 wheel
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip setuptools wheel
+          python -m pip wheel --no-deps --no-cache-dir \
+            --wheel-dir wheelhouse \
+            ./source/timezonefinder-6.5.2.tar.gz
+          python - <<'PY'
+          import pathlib,zipfile,sys,platform,email
+          assert sys.version_info[:2]==(3,12) and platform.machine()=="aarch64"
+          paths=list(pathlib.Path("wheelhouse").glob("timezonefinder-6.5.2-*.whl"))
+          assert len(paths)==1, "NOT_EXACT_SINGLE_VERSION"
+          w=paths[0]
+          assert "aarch64" in w.name and "cp312" in w.name, "NOT_CP312_AARCH64"
+          with zipfile.ZipFile(w) as z:
+              assert z.testzip() is None
+              matches=[x for x in z.namelist() if x.endswith(".dist-info/METADATA")]
+              assert len(matches)==1
+              m=email.message_from_bytes(z.read(matches[0]))
+              assert m["Name"].lower()=="timezonefinder"
+              assert m["Version"]=="6.5.2"
+              assert not any(x.startswith("/") or ".." in x.split("/") for x in z.namelist())
+          print("CH24_B03_TIMEZONEFINDER_SOURCE_BUILT_ARM64=PASS")
+          PY
+      - name: Verify runtime against frozen interoperable dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install numpy==1.26.4 h3==3.7.7 cffi==1.17.1
+          python -m pip install --no-index --no-deps --find-links wheelhouse 'timezonefinder==6.5.2'
+          python - <<'PY'
+          import importlib.metadata as md,platform,timezonefinder
+          assert platform.machine()=="aarch64" and md.version("timezonefinder")=="6.5.2"
+          from timezonefinder import TimezoneFinder
+          obj=TimezoneFinder()
+          actual=obj.timezone_at(lng=-73.9857,lat=40.7484)
+          assert actual == "America/New_York", actual
+          print("CH24_B03_TIMEZONEFINDER_RUNTIME_FROZEN_PIN_CHECK=PASS")
+          PY
+      - name: Retain original sdist, wheel, and verifiable public build receipt
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib,json,os,pathlib,platform,subprocess,sys,zipfile
+          src=pathlib.Path("source/timezonefinder-6.5.2.tar.gz")
+          wheels=list(pathlib.Path("wheelhouse").glob("timezonefinder-6.5.2-*.whl"))
+          assert len(wheels)==1
+          wheel=wheels[0]
+          sha=lambda x:hashlib.sha256(x.read_bytes()).hexdigest()
+          expected="3279e67d5b1b9a54d1a16f3bd4234169f14e2b90c0f58ed37bcfa7303645d610"
+          assert sha(src)==expected
+          assert platform.machine()=="aarch64" and sys.version_info[:2]==(3,12)
+          with zipfile.ZipFile(wheel) as z:
+              assert z.testzip() is None
+          receipt={
+            "schema":"CH24_B03_PUBLIC_TIMEZONEFINDER_6_5_2_ARM64_SOURCE_BUILD_RECEIPT_V1",
+            "public_build_only":True,"private_v4_files_accessed":False,
+            "original_source_filename":src.name,
+            "original_source_sha256":sha(src),
+            "original_source_sha256_expected":expected,
+            "upstream_source_url":"https://pypi.org/project/timezonefinder/6.5.2/",
+            "original_source_release_pypi_provenance":"NOT_ATTESTED_BY_PYPI",
+            "wheel_filename":wheel.name,"wheel_sha256":sha(wheel),
+            "wheel_size_bytes":wheel.stat().st_size,
+            "python":platform.python_version(),"architecture":platform.machine(),
+            "gcc":subprocess.check_output(["gcc","-dumpfullversion"],text=True).strip(),
+            "commit":os.environ.get("GITHUB_SHA",""),
+            "wheel_archive_crc":"PASS","runtime_timezone":"America/New_York",
+            "scientific_certification":False,"private_gitlab_ingested":False,
+            "consumer_release":False
+          }
+          pathlib.Path("wheelhouse/BUILD_PROVENANCE.json").write_text(json.dumps(receipt,indent=2,sort_keys=True)+"\n")
+          pathlib.Path("wheelhouse/SHA256SUMS.txt").write_text(sha(wheel)+"  "+wheel.name+"\n")
+          print(json.dumps(receipt,sort_keys=True))
+          PY
+      - name: Upload both original source and native wheel for separately verified private ingestion
+        uses: actions/upload-artifact@v4
+        with:
+          name: original-source-timezonefinder-6.5.2-cp312-aarch64
+          path: |
+            source/
+            wheelhouse/
+          retention-days: 7
+          if-no-files-found: error
