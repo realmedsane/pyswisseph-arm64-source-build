@@ -1,0 +1,102 @@
+name: Build exact open-source pyswisseph 2.10.3.2 ARM64 wheel
+
+# TEMPLATE: designed for a separate PUBLIC GitHub repository containing ONLY
+# this open-source build recipe. GitHub standard public ARM64 runners are free.
+# DO NOT copy Interplay code, private birth charts, ephemeris ZIPs, or tokens.
+# Do NOT grant GitLab secrets or GitLab login access to the public workflow.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/track2_m1_arm64_wheel.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  public-open-source-arm64-wheel:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+    steps:
+      - name: Set Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Download and pin original PyPI 2023 source distribution
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p source wheelhouse
+          python -m pip install 'setuptools' 'wheel'
+          python -m pip download --no-deps --no-binary=:all: --no-build-isolation \
+            pyswisseph==2.10.3.2 -d source/
+          test "$(find source -name '*.tar.gz' | wc -l)" = 1
+          echo "c54c305e83dbd5d2b71e58d8a69d8ee41de24c4d3328ce09e2af860a3537624d  source/pyswisseph-2.10.3.2.tar.gz" | sha256sum -c -
+      - name: Compile exact source for CPython 3.12 Linux ARM64
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = "aarch64"
+          python -m pip wheel --no-build-isolation --no-deps \
+            ./source/pyswisseph-2.10.3.2.tar.gz -w wheelhouse/
+          test -f wheelhouse/pyswisseph-2.10.3.2-cp312-cp312-linux_aarch64.whl
+          sha256sum wheelhouse/*.whl > wheelhouse/SHA256SUMS.txt
+      - name: Validate built ABI and exact Swiss C version
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --no-deps --no-index \
+            --find-links=wheelhouse pyswisseph==2.10.3.2
+          python - <<'PY'
+          import importlib.metadata as m, platform, swisseph as swe
+          assert platform.machine() == 'aarch64'
+          assert m.version('pyswisseph') == '2.10.3.2'
+          assert swe.version == '2.10.03'
+          assert swe.BIT_HINDU_RISING == 896
+          assert swe.FLG_SWIEPH == 2 and swe.FLG_MOSEPH == 4
+          print('OPEN_SOURCE_ARM64_WHEEL_BUILD_CHECK_PASS')
+          PY
+      - name: Build provenance and archive integrity readback
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib, json, os, pathlib, platform, subprocess, sys, zipfile
+          source=pathlib.Path("source/pyswisseph-2.10.3.2.tar.gz")
+          wheel=pathlib.Path("wheelhouse/pyswisseph-2.10.3.2-cp312-cp312-linux_aarch64.whl")
+          sha=lambda p:hashlib.sha256(p.read_bytes()).hexdigest()
+          expected="c54c305e83dbd5d2b71e58d8a69d8ee41de24c4d3328ce09e2af860a3537624d"
+          assert sha(source)==expected, "UNTRUSTED_OR_CHANGED_UPSTREAM_SOURCE"
+          assert sys.version_info[:2]==(3,12) and platform.machine()=="aarch64"
+          assert wheel.is_file(), "MISSING_EXACT_CP312_AARCH64_WHEEL"
+          with zipfile.ZipFile(wheel) as z:
+              assert z.testzip() is None, "WHEEL_CRC_FAIL"
+              names=z.namelist()
+              assert any(n.startswith("pyswisseph-2.10.3.2.dist-info/") and n.endswith("METADATA") for n in names)
+              assert any(n.endswith(".so") and "aarch64" in n for n in names)
+              assert all(not n.startswith("/") and ".." not in pathlib.PurePosixPath(n).parts for n in names)
+          receipt={
+            "schema":"TRACK2_M1_PUBLIC_SOURCE_ONLY_ARM64_WHEEL_BUILD_RECEIPT_V1",
+            "public_build_only":True,"private_v4_files_accessed":False,
+            "pyswisseph_version":"2.10.3.2","swisseph_version":"2.10.03",
+            "source_url":"https://pypi.org/project/pyswisseph/2.10.3.2/",
+            "source_sha256":sha(source),"source_sha256_expected":expected,
+            "wheel_filename":wheel.name,"wheel_sha256":sha(wheel),
+            "wheel_size_bytes":wheel.stat().st_size,
+            "python":platform.python_version(),"architecture":platform.machine(),
+            "commit":os.environ.get("GITHUB_SHA",""),"compiler":subprocess.check_output(["gcc","-dumpfullversion"],text=True).strip(),
+            "wheel_archive_crc":"PASS","package_abi_runtime_check":"PASS",
+            "private_gitlab_registry_ingested":False,"owner_sha_approval":False,
+            "scientific_229_events_executed":False,"scientific_pass":False
+          }
+          pathlib.Path("wheelhouse/BUILD_PROVENANCE.json").write_text(json.dumps(receipt,indent=2,sort_keys=True)+"\n")
+          print(json.dumps(receipt,sort_keys=True))
+          PY
+      - name: Upload checksum-verified wheel for PRIVATE ingestion
+        uses: actions/upload-artifact@v4
+        with:
+          name: official-source-pyswisseph-2.10.3.2-cp312-aarch64
+          path: wheelhouse/
+          retention-days: 1
+          if-no-files-found: error
